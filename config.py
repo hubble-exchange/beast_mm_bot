@@ -8,8 +8,18 @@ ETH = {
     "priceFeed": "binance-futures",
     "orderLevels": {
         "1": {
+            "spread": 0.01,
+            "qty": 0.12,
+            "refreshTolerance": 0
+        },
+        "2": {
+            "spread": 0.03,
+            "qty": 0.23,
+            "refreshTolerance": 0
+        },
+        "3": {
             "spread": 0.05,
-            "qty": 0.05,
+            "qty": 0.45,
             "refreshTolerance": 0
         }
     }
@@ -25,13 +35,18 @@ AVAX = {
     "priceFeed": "binance-futures",
     "orderLevels": {
         "1": {
-            "spread": 0.003,
-            "qty": 4,
+            "spread": 0.01,
+            "qty": 16,
             "refreshTolerance": 0
         },
         "2": {
-            "spread": 0.005,
-            "qty": 7,
+            "spread": 0.02,
+            "qty": 42,
+            "refreshTolerance": 0
+        },
+        "3": {
+            "spread": 0.03,
+            "qty": 69,
             "refreshTolerance": 0
         }
     }
@@ -47,8 +62,18 @@ SOL = {
     "priceFeed": "binance-futures",
     "orderLevels": {
         "1": {
-            "spread": 0.05,
-            "qty": 1.2,
+            "spread": 0.01,
+            "qty": 3.1,
+            "refreshTolerance": 0
+        },
+        "2": {
+            "spread": 0.02,
+            "qty": 4.2,
+            "refreshTolerance": 0
+        },
+        "3": {
+            "spread": 0.03,
+            "qty": 5.3,
             "refreshTolerance": 0
         }
     }
