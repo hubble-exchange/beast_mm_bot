@@ -25,6 +25,8 @@ ETH = {
     "position_data_expiry": 10,  # expiry of position data for hubble positions (should be greater than hubblePositionPollInterval)
     "hubble_orderbook_frequency": "1s",  # update Hubble orderbook at this freq
     "performance_tracking_interval": 1800,  # track performance every x seconds as a new row in the csv
+    "cancel_orders_on_price_change": False,  # cancel stale orders when price changes by cancellation threshold percentage
+    "cancellation_threshold": 0.05,  # when new mid price deviates from the price orders were placed at by this percentage, cancel orders
 }
 
 AVAX = {
@@ -54,6 +56,8 @@ AVAX = {
     "position_data_expiry": 10,  # expiry of position data for hubble positions (should be greater than hubblePositionPollInterval)
     "hubble_orderbook_frequency": "1s",  # update Hubble orderbook at this freq
     "performance_tracking_interval": 1800,  # track performance every x seconds as a new row in the csv
+    "cancel_orders_on_price_change": True,  # cancel stale orders when price changes by cancellation threshold percentage
+    "cancellation_threshold": 0.05,  # when new mid price deviates from the price orders were placed at by this percentage, cancel orders
 }
 
 SOL = {
@@ -83,4 +87,6 @@ SOL = {
     "position_data_expiry": 10,  # expiry of position data for hubble positions (should be greater than hubblePositionPollInterval)
     "hubble_orderbook_frequency": "1s",  # update Hubble orderbook at this freq
     "performance_tracking_interval": 1800,  # track performance every x seconds as a new row in the csv
+    "cancel_orders_on_price_change": True,  # cancel stale orders when price changes by cancellation threshold percentage
+    "cancellation_threshold": 0.05,  # when new mid price deviates from the price orders were placed at by this percentage, cancel orders
 }

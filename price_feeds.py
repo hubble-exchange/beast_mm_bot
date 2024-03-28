@@ -12,19 +12,17 @@ import tools
 
 class PriceFeed:
 
-    mid_price = 0
-    mid_price_last_updated_at = 0
-    hubble_prices = [float("inf"), 0]  # [best_ask, best_bid]
-    hubble_market_id = None
-    hubble_client = None
-    is_price_feed_stopped = True
-
-    binance_market_id = None
-    binance_futures_feed_stopped = True
-    unhandled_exception_encountered = asyncio.Event()
-
-    def __init__(self, unhandled_exception_encountered):
+    def __init__(self, unhandled_exception_encountered: asyncio.Event):
         self.unhandled_exception_encountered = unhandled_exception_encountered
+        self.mid_price = 0
+        self.mid_price_last_updated_at = 0
+        self.hubble_prices = [float("inf"), 0]  # [best_ask, best_bid]
+        self.hubble_market_id = None
+        self.hubble_client = None
+        self.is_hubble_price_feed_stopped = True
+        self.binance_spot_feed_stopped = True
+        self.binance_market_id = None
+        self.binance_futures_feed_stopped = True
 
     async def start_hubble_feed(
         self, client: HubbleClient, market, freq, hubble_price_streaming_event
@@ -45,9 +43,9 @@ class PriceFeed:
         retry_delay = 2
 
         async def callback(ws, response: OrderBookDepthUpdateResponse):
-            if self.is_price_feed_stopped:
+            if self.is_hubble_price_feed_stopped:
                 hubble_price_streaming_event.set()
-                self.is_price_feed_stopped = False
+                self.is_hubble_price_feed_stopped = False
                 # @todo check how to reset these values.
                 attempt_count = 0  # Reset attempt counter on successful connection
                 retry_delay = 1  # Reset retry delay on successful connection
@@ -92,12 +90,17 @@ class PriceFeed:
                 print("Error in start_hubble_feed err - ", e)
                 # restart hubble feed
                 hubble_price_streaming_event.clear()
-                self.is_price_feed_stopped = True
+                self.is_hubble_price_feed_stopped = True
                 attempt_count += 1
                 await asyncio.sleep(retry_delay)  # wait for retry_delay
                 retry_delay *= 2  # Exponential backoff
 
-    async def start_binance_spot_feed(self, market, mid_price_feed_stopped_event):
+    async def start_binance_spot_feed(
+        self,
+        market,
+        mid_price_streaming_event: asyncio.Event,
+        mid_price_condition: asyncio.Condition,
+    ):
         symbol = tools.get_symbol_from_name(market) + "USDT"
         client = await AsyncClient.create()
         bm = BinanceSocketManager(client)
@@ -105,20 +108,51 @@ class PriceFeed:
         ts = bm.trade_socket(symbol)
         # then start receiving messages
         async with ts as tscm:
+            retry_delay = 3  # Initial retry delay in seconds
+            max_retries = 5  # Maximum number of retries
+            attempt_count = 0  # Attempt counter
             while True:
-                res = await tscm.recv()
-                priceUsdt = float(res["p"])
-                self.mid_price = priceUsdt
+                try:
+
+                    res = await tscm.recv()
+                    if self.binance_spot_feed_stopped:
+                        # @todo check if this is the correct way to clear the event
+                        mid_price_streaming_event.set()
+                        self.binance_spot_feed_stopped = False
+                    price = float(res["p"])
+                    self.mid_price = price
+                    # @todo check the data for timestamp
+                    # self.mid_price_last_updated_at = data["T"] / 1000
+                    mid_price_condition.notify_all()
+                except Exception as e:
+                    if attempt_count >= max_retries:
+                        print(
+                            "Maximum retry attempts reached. Exiting binance spot feed."
+                        )
+                        self.unhandled_exception_encountered.set()
+                        break
+                    mid_price_streaming_event.clear()
+                    self.binance_spot_feed_stopped = True
+                    print(f"Binance futures feed connection error: {e}")
+                    attempt_count += 1
+                    print(
+                        f"Attempting to reconnect in {retry_delay} seconds... (Attempt {attempt_count}/{max_retries})"
+                    )
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
         await client.close_connection()
 
     async def start_binance_futures_feed(
-        self, market, frequency, mid_price_streaming_event
+        self,
+        market,
+        mid_price_streaming_event: asyncio.Event,
+        mid_price_condition: asyncio.Condition,
     ):
         symbol = tools.get_symbol_from_name(market) + "USDT"
         print(f"Starting Binance Futures price feed for {symbol}...")
         task = asyncio.create_task(
             self.subscribe_to_binance_futures_feed(
-                symbol, frequency, mid_price_streaming_event
+                symbol, mid_price_streaming_event, mid_price_condition
             )
         )
         print("Binance Futures price feed started.")
@@ -126,7 +160,10 @@ class PriceFeed:
         # ws_url = f"wss://fstream.binance.com/ws/{symbol.lower()}@depth@100ms"
 
     async def subscribe_to_binance_futures_feed(
-        self, symbol, frequency, mid_price_streaming_event
+        self,
+        symbol,
+        mid_price_streaming_event: asyncio.Event,
+        mid_price_condition: asyncio.Condition,
     ):
         print(f"subscribe_to_binance_futures_feed for {symbol}...")
         ws_url = f"wss://fstream.binance.com/ws/{symbol.lower()}@bookTicker"
@@ -134,14 +171,12 @@ class PriceFeed:
         retry_delay = 3  # Initial retry delay in seconds
         max_retries = 5  # Maximum number of retries
         attempt_count = 0  # Attempt counter
-        next_timestamp = 0
         while True:
             try:
                 async with websockets.connect(ws_url) as websocket:
                     print("Connected to the server.")
                     if self.binance_futures_feed_stopped:
                         # @todo check if this is the correct way to clear the event
-                        print("setting mid_price_streaming_event")
                         mid_price_streaming_event.set()
                         self.binance_futures_feed_stopped = False
                     attempt_count = 0  # Reset attempt counter on successful connection
@@ -149,20 +184,14 @@ class PriceFeed:
                     while True:
                         message = await websocket.recv()
                         data = json.loads(message)
-                        # if next_timestamp - float(data["T"]) / 1000 > 0:
-                        # print(f"skipping data: {float(data['T'])/1000}")
-                        # continue  # discard the data and wait for the next piece
-                        # print(
-                        #     f"data fetched at time: {time.time()} lag of {time.time() - float(data['T'])/1000}"
-                        # )
-                        # print(f"binance data: {data}")
+
                         self.mid_price = round(
                             (float(data["b"]) + float(data["a"])) / 2, 5
                         )
                         # print(f"Mid price: {self.mid_price}")
                         self.mid_price_last_updated_at = data["T"] / 1000
-                        next_timestamp = time.time() + frequency
-                        # await asyncio.sleep(frequency)
+                        async with mid_price_condition:
+                            mid_price_condition.notify_all()
 
             except Exception as e:
                 if attempt_count >= max_retries:

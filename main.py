@@ -41,21 +41,25 @@ async def main(market):
     hubble_price_streaming_event = asyncio.Event()
     hedge_client_uptime_event = asyncio.Event()
     price_feed = PriceFeed(unhandled_exception_encountered)
+    mid_price_condition = asyncio.Condition()
 
     # this task manages exiting application in case of unhandled exceptions. This can be restarted with use of pm2 configuration.
 
-    monitor_task = asyncio.create_task(exit_maker(unhandled_exception_encountered))
+    asyncio.create_task(exit_maker(unhandled_exception_encountered))
+
     try:
         if settings["priceFeed"] == "binance-futures":
             print("Starting feed")
-            price_feed_task = await price_feed.start_binance_futures_feed(
-                market, settings["futures_feed_frequency"], mid_price_streaming_event
+            await price_feed.start_binance_futures_feed(
+                market,
+                mid_price_streaming_event,
+                mid_price_condition,
             )
-            # await price_feed_task
-            print("Starting feed done")
         else:
             asyncio.create_task(
-                price_feed.start_binance_spot_feed(market, mid_price_streaming_event)
+                price_feed.start_binance_spot_feed(
+                    market, mid_price_streaming_event, mid_price_condition
+                )
             )
 
         markets = await hubble_client.get_markets()
@@ -108,6 +112,7 @@ async def main(market):
             mid_price_streaming_event,
             hubble_price_streaming_event,
             hedge_client_uptime_event,
+            mid_price_condition,
         )
 
         # except Exception as e:

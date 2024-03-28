@@ -19,21 +19,6 @@ import os
 
 class OrderManager(object):
 
-    performance_data = {
-        "start_time": 0,
-        "end_time": 0,
-        "cumulative_trade_volume": 0,
-        "trade_volume_in_period": 0,
-        "orders_attempted": 0,
-        "orders_placed": 0,
-        "orders_filled": 0,
-        "orders_failed": 0,
-        "orders_hedged": 0,
-        "hedge_spread_pnl": 0,
-        # "taker_fee": 0, @todo add this
-        # "maker_fee": 0, @todo add this
-    }
-
     def __init__(self, unhandled_exception_encountered: asyncio.Event):
         self.unhandled_exception_encountered = unhandled_exception_encountered
         self.client = None
@@ -53,6 +38,24 @@ class OrderManager(object):
         self.is_order_fill_active = False
         self.is_trader_position_feed_active = False
         self.save_performance_task = None
+        self.mid_price_condition = None
+        self.performance_data = {
+            "start_time": 0,
+            "end_time": 0,
+            "cumulative_trade_volume": 0,
+            "trade_volume_in_period": 0,
+            "orders_attempted": 0,
+            "orders_placed": 0,
+            "orders_filled": 0,
+            "orders_failed": 0,
+            "orders_hedged": 0,
+            "hedge_spread_pnl": 0,
+            # "order_cancellations_attempted": 0,
+            # "orders_cancelled": 0,
+            # "order_cancellations_failed": 0,
+            # "taker_fee": 0, @todo add this
+            # "maker_fee": 0, @todo add this
+        }
 
     async def start(
         self,
@@ -64,6 +67,7 @@ class OrderManager(object):
         mid_price_streaming_event: asyncio.Event,
         hubble_price_streaming_event: asyncio.Event,
         hedge_client_uptime_event: asyncio.Event,
+        mid_price_condition: asyncio.Condition,
     ):
         self.performance_data["start_time"] = time.strftime("%d-%m-%Y %H:%M")
         self.client = client
@@ -90,6 +94,7 @@ class OrderManager(object):
                 hedge_client_uptime_event,
             )
         )
+        self.mid_price_condition = mid_price_condition
         print("returning tasks from order manager")
         future = await asyncio.gather(
             t1, t2, self.create_orders_task, self.save_performance_task
@@ -107,6 +112,33 @@ class OrderManager(object):
             time.time() - mid_price_update_time > price_expiry
             or time.time() - position_last_update_time > position_expiry
         )
+
+    async def monitor_cancellation(self, signed_orders, mid_price, expiry_time):
+        while time.time() < expiry_time:
+            async with self.mid_price_condition:
+                await self.mid_price_condition.wait()
+                updated_mid_price = self.price_feed.get_mid_price()
+                delta_mid_price_percentage = (
+                    (updated_mid_price - mid_price) * 100
+                ) / mid_price
+
+                if (
+                    abs(delta_mid_price_percentage)
+                    >= self.settings["cancellation_threshold"]
+                ):
+
+                    cancelled_orders = await self.client.cancel_signed_orders(
+                        signed_orders, False, tools.generic_callback
+                    )
+                    # self.performance_data["order_cancellations_attempted"] += len(
+                    #     cancelled_orders
+                    # )
+                    # for order in enumerate(cancelled_orders):
+                    #     if order["success"]:
+                    #         self.performance_data["orders_cancelled"] += 1
+                    #     else:
+                    #         self.performance_data["order_cancellations_failed"] += 1
+                    break
 
     async def create_orders(
         self,
@@ -208,6 +240,7 @@ class OrderManager(object):
                 signed_orders, tools.generic_callback
             )
             self.performance_data["orders_attempted"] += len(placed_orders)
+            successful_orders = []
             for idx, order in enumerate(placed_orders):
                 price = int_to_scaled_float(signed_orders[idx].price, 6)
                 quantity = int_to_scaled_float(
@@ -215,6 +248,7 @@ class OrderManager(object):
                 )
                 if order["success"]:
                     self.performance_data["orders_placed"] += 1
+                    successful_orders.append(signed_orders[idx])
                     print(f"{order['order_id']}: {quantity}@{price} : ✅")
                     self.order_data[order["order_id"]] = signed_orders[idx]
                 else:
@@ -222,6 +256,18 @@ class OrderManager(object):
                     print(
                         f"{order['order_id']}: {quantity}@{price} : ❌; {order['error']}"
                     )
+
+            if (
+                self.settings["cancel_orders_on_price_change"]
+                and len(successful_orders) > 0
+            ):
+                asyncio.create_task(
+                    self.monitor_cancellation(
+                        successful_orders,
+                        self.mid_price,
+                        time.time() + self.settings["orderExpiry"],
+                    )
+                )
         except Exception as error:
             print("failed to place orders", error)
             raise error
@@ -434,11 +480,7 @@ class OrderManager(object):
                 await asyncio.sleep(retry_delay)
                 retry_delay *= 2
 
-    async def get_order_data(self, order_id):
-        return self.order_data.get(order_id)
-
     # For order fill callbacks
-
     async def order_fill_callback(self, ws, response: TraderFeedUpdate):
         if response.EventName == "OrderMatched":
             print(
@@ -572,8 +614,11 @@ class OrderManager(object):
                         "orders_failed": 0,
                         "orders_hedged": 0,
                         "hedge_spread_pnl": 0,
-                        "taker_fee": 0,
-                        "maker_fee": 0,
+                        # "order_cancellations_attempted": 0,
+                        # "orders_cancelled": 0,
+                        # "order_cancellations_failed": 0,
+                        # "taker_fee": 0,
+                        # "maker_fee": 0,
                     }
 
                 # Sleep for a certain amount of time
