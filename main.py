@@ -4,7 +4,7 @@ import asyncio
 import time
 import ast
 from hubble_exchange import HubbleClient, ConfirmationMode
-from dotenv import load_dotenv, dotenv_values
+from dotenv import dotenv_values
 import tools
 from price_feeds import PriceFeed
 
@@ -21,8 +21,7 @@ os.environ["HUBBLE_WS_RPC"] = env["HUBBLE_WS_RPC"]
 os.environ["HUBBLE_ENV"] = env["HUBBLE_ENV"]
 os.environ["PRIVATE_KEY"] = env[sys.argv[1] + "_PRIVATE_KEY"]
 os.environ["HUBBLE_INDEXER_API_URL"] = env["HUBBLE_INDEXER_API_URL"]
-os.environ["HYPERLIQUID_TRADER"] = env["HYPERLIQUID_TRADER"]
-os.environ["HYPERLIQUID_PRIVATE_KEY"] = env["HYPERLIQUID_PRIVATE_KEY"]
+
 # settings = ast.literal_eval(env[sys.argv[1]])
 settings = getattr(config, sys.argv[1])
 
@@ -40,6 +39,7 @@ async def main(market):
     mid_price_streaming_event = asyncio.Event()
     hubble_price_streaming_event = asyncio.Event()
     hedge_client_uptime_event = asyncio.Event()
+    hedge_client = None
     price_feed = PriceFeed(unhandled_exception_encountered)
     mid_price_condition = asyncio.Condition()
 
@@ -66,7 +66,7 @@ async def main(market):
         market_name = settings["name"]
         asset_name = market_name.split("-")[0]
         hubble_market_id = tools.get_key(markets, market_name)
-        if settings["hedgeMode"]:
+        if settings["hedge_mode"]:
             if settings["hedge"] == "hyperliquid":
                 hedge_client = HyperLiquid(
                     asset_name,
@@ -111,8 +111,8 @@ async def main(market):
             hedge_client,
             mid_price_streaming_event,
             hubble_price_streaming_event,
-            hedge_client_uptime_event,
             mid_price_condition,
+            hedge_client_uptime_event,
         )
 
         # except Exception as e:
@@ -139,6 +139,6 @@ except KeyboardInterrupt:
     # # Handle other shutdown signals here
     # print("CANCELLING ORDERS AND SHUTTING DOWN")
     # task = loop.create_task(marketMaker.cancelAllOrders(hubble_client, marketID))
-    # # if settings["hedgeMode"]:
+    # # if settings["hedge_mode"]:
     # #     asyncio.run(hedge_client.exit())
     # loop.run_until_complete(task)

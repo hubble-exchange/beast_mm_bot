@@ -27,7 +27,7 @@
 #     hubble_client = client
 #     lastUpdatePrice = 0
 
-#     expiry_duration = settings["orderExpiry"]
+#     expiry_duration = settings["order_expiry"]
 #     max_leverage = settings["leverage"]
 #     # max_position_size = settings["maxPositionSize"]
 #     while True:
@@ -152,13 +152,13 @@
 #     orders = []
 #     amountOnOrder = 0
 #     leverage = float(settings["leverage"])
-#     for level in settings["orderLevels"]:
-#         order_level = settings["orderLevels"][level]
+#     for level in settings["order_levels"]:
+#         order_level = settings["order_levels"][level]
 #         spread = float(order_level["spread"]) / 100 + defensiveSkew
 #         bidPrice = midPrice * (1 - spread)
 #         roundedBidPrice = round(bidPrice, get_price_precision(marketID))
 #         best_ask_on_hubble = tools.get_hubble_prices()[0]
-#         if settings.get("avoidCrossing", False):
+#         if settings.get("avoid_crossing", False):
 #             # shift the spread to avoid crossing
 #             if roundedBidPrice >= best_ask_on_hubble:
 #                 bidPrice = best_ask_on_hubble * (1 - spread)
@@ -202,12 +202,12 @@
 #     orders = []
 #     amountOnOrder = 0
 #     leverage = float(settings["leverage"])
-#     for level in settings["orderLevels"]:
-#         order_level = settings["orderLevels"][level]
+#     for level in settings["order_levels"]:
+#         order_level = settings["order_levels"][level]
 #         spread = float(order_level["spread"]) / 100 + defensiveSkew
 #         askPrice = midPrice * (1 + spread)
 #         roundedAskPrice = round(askPrice, get_price_precision(marketID))
-#         if settings.get("avoidCrossing", False):
+#         if settings.get("avoid_crossing", False):
 #             best_bid_on_hubble = tools.get_hubble_prices()[1]
 #             if roundedAskPrice <= best_bid_on_hubble:
 #                 askPrice = best_bid_on_hubble * (1 + spread)

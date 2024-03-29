@@ -15,6 +15,7 @@ from enum import Enum
 import cachetools
 import websockets
 import os
+from typing import Union
 
 
 class OrderManager(object):
@@ -63,11 +64,11 @@ class OrderManager(object):
         market: str,
         settings: dict,
         client: HubbleClient,
-        hedge_client: HyperLiquid or Binance,
+        hedge_client: Union[HyperLiquid, Binance, None],
         mid_price_streaming_event: asyncio.Event,
         hubble_price_streaming_event: asyncio.Event,
-        hedge_client_uptime_event: asyncio.Event,
         mid_price_condition: asyncio.Condition,
+        hedge_client_uptime_event: Union[asyncio.Event, None] = None,
     ):
         self.performance_data["start_time"] = time.strftime("%d-%m-%Y %H:%M")
         self.client = client
@@ -75,13 +76,13 @@ class OrderManager(object):
         self.hedge_client = hedge_client
         self.market = market
         self.order_data = cachetools.TTLCache(
-            maxsize=128, ttl=self.settings["orderExpiry"] + 2
+            maxsize=128, ttl=self.settings["order_expiry"] + 2
         )
         self.price_feed = price_feed
         # monitor_task = asyncio.create_task(self.monitor_restart())
         t1 = asyncio.create_task(self.start_order_fill_feed())
         t2 = asyncio.create_task(
-            self.start_trader_positions_feed(settings["hubblePositionPollInterval"])
+            self.start_trader_positions_feed(settings["hubble_position_poll_interval"])
         )
 
         self.save_performance_task = asyncio.create_task(self.save_performance())
@@ -140,11 +141,20 @@ class OrderManager(object):
                     #         self.performance_data["order_cancellations_failed"] += 1
                     break
 
+    async def wait_until_next_order(self):
+        # aim to place the order exactly at the start of the second
+        now = time.time()
+        order_frequency = self.settings["order_frequency"]
+        next_run = order_frequency - (now % order_frequency)
+        if next_run < 0:
+            next_run += order_frequency
+        await asyncio.sleep(next_run)
+
     async def create_orders(
         self,
         mid_price_streaming_event,
         hubble_price_streaming_event,
-        hedge_client_uptime_event,
+        hedge_client_uptime_event: Union[asyncio.Event, None] = None,
     ):
         max_retries = 5
         attempt_count = 0
@@ -154,7 +164,7 @@ class OrderManager(object):
                 # check for all services to be active
                 await mid_price_streaming_event.wait()
                 await hubble_price_streaming_event.wait()
-                if self.settings["hedgeMode"]:
+                if self.settings["hedge_mode"]:
                     await hedge_client_uptime_event.wait()
 
                 # print("####### all clear #######")
@@ -171,7 +181,7 @@ class OrderManager(object):
                 # get mid price
                 if self.order_fill_cooldown_triggered:
                     print("order fill cooldown triggered, skipping order creation")
-                    await asyncio.sleep(self.settings["orderFrequency"])
+                    await self.wait_until_next_order()
                     continue
                 self.mid_price = self.price_feed.get_mid_price()
                 self.mid_price_last_updated_at = (
@@ -186,7 +196,7 @@ class OrderManager(object):
                 ):
                     # todo handle better or with config.
                     print("stale data, skipping order creation")
-                    await asyncio.sleep(self.settings["orderFrequency"])
+                    await self.wait_until_next_order()
                     continue
 
                 (
@@ -214,7 +224,7 @@ class OrderManager(object):
 
                 attempt_count = 0
                 retry_delay = 2
-                await asyncio.sleep(self.settings["orderFrequency"])
+                await self.wait_until_next_order()
             except Exception as e:
                 print(f"failed to create orders: {e}")
                 if attempt_count >= max_retries:
@@ -231,7 +241,7 @@ class OrderManager(object):
 
     async def set_order_fill_cooldown(self):
         self.order_fill_cooldown_triggered = True
-        await asyncio.sleep(self.settings["orderFillCooldown"])
+        await asyncio.sleep(self.settings["order_fill_cooldown"])
         self.order_fill_cooldown_triggered = False
 
     async def place_orders(self, signed_orders):
@@ -265,7 +275,7 @@ class OrderManager(object):
                     self.monitor_cancellation(
                         successful_orders,
                         self.mid_price,
-                        time.time() + self.settings["orderExpiry"],
+                        time.time() + self.settings["order_expiry"],
                     )
                 )
         except Exception as error:
@@ -341,15 +351,15 @@ class OrderManager(object):
         # print("generating buy orders")
         orders = []
         leverage = float(self.settings["leverage"])
-        for level in self.settings["orderLevels"]:
-            order_level = self.settings["orderLevels"][level]
+        for level in self.settings["order_levels"]:
+            order_level = self.settings["order_levels"][level]
             spread = float(order_level["spread"]) / 100 + defensive_skew
             bid_price = self.mid_price * (1 - spread)
             rounded_bid_price = round(bid_price, get_price_precision(self.market))
             # following should not block the execution
             try:
                 best_ask_on_hubble = self.price_feed.get_hubble_prices()[0]
-                if self.settings.get("avoidCrossing", False):
+                if self.settings.get("avoid_crossing", False):
                     # shift the spread to avoid crossing
                     if rounded_bid_price >= best_ask_on_hubble:
                         bid_price = best_ask_on_hubble * (1 - spread)
@@ -383,7 +393,7 @@ class OrderManager(object):
                 qty,
                 rounded_bid_price,
                 reduce_only,
-                self.settings["orderExpiry"],
+                self.settings["order_expiry"],
             )
 
             orders.append(order)
@@ -397,12 +407,12 @@ class OrderManager(object):
         # print("generating sell orders")
         orders = []
         leverage = float(self.settings["leverage"])
-        for level in self.settings["orderLevels"]:
-            order_level = self.settings["orderLevels"][level]
+        for level in self.settings["order_levels"]:
+            order_level = self.settings["order_levels"][level]
             spread = float(order_level["spread"]) / 100 + defensive_skew
             ask_price = self.mid_price * (1 + spread)
             rounded_ask_price = round(ask_price, get_price_precision(self.market))
-            if self.settings.get("avoidCrossing", False):
+            if self.settings.get("avoid_crossing", False):
                 best_bid_on_hubble = self.price_feed.get_hubble_prices()[1]
                 if rounded_ask_price <= best_bid_on_hubble:
                     ask_price = best_bid_on_hubble * (1 + spread)
@@ -431,7 +441,7 @@ class OrderManager(object):
                 qty,
                 rounded_ask_price,
                 reduce_only,
-                self.settings["orderExpiry"],
+                self.settings["order_expiry"],
             )
             orders.append(order)
         return orders
@@ -502,7 +512,7 @@ class OrderManager(object):
             self.performance_data["cumulative_trade_volume"] += float(
                 response.Args["fillAmount"]
             )  # fillAmount is abs value
-            if self.settings["hedgeMode"]:
+            if self.settings["hedge_mode"]:
                 try:
                     order_direction = 1 if order_data.base_asset_quantity > 0 else -1
                     # @todo add taker fee data here

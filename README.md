@@ -98,8 +98,8 @@ pm2 start ecosystem.config.js --only avax
 ### OrderManager
   Start
   - start in background an orderfill callback listener (start_order_fill_feed) which continously listenes for updates to traders account like position updates, order fills etc.
-  - start in background trader position data and margin data update service (start_trader_positions_feed @ settings["hubblePositionPollInterval"])
-  - start create_orders service that runs @ settings["orderFrequency"]
+  - start in background trader position data and margin data update service (start_trader_positions_feed @ settings["hubble_position_poll_interval"])
+  - start create_orders service that runs @ settings["order_frequency"]
 
 
 *start_trader_positions_feed*
@@ -132,7 +132,7 @@ pm2 start ecosystem.config.js --only avax
   - hedge_client_uptime_event is set 
   - mid_price_streaming_event is set 
   - hubble_price_streaming_event is set 
-  - orderFillCooldown
+  - order_fill_cooldown
   - check if data is stale with thresholds [ , "position_data_expiry"]
     - Binance mid_price @ settings["mid_price_expiry"]
     - Hubble position data @ settings["position_data_expiry"]
@@ -142,7 +142,7 @@ pm2 start ecosystem.config.js --only avax
     @todo add math info here.
   - update bid and ask defensive skew 
     @todo add math info here
-  - Generate bid and ask orders based on orderLevels defined in settings
+  - Generate bid and ask orders based on order_levels defined in settings
     - Check if order is hedgable. 
       - If not skip 
       - If is hedgable add to orders 

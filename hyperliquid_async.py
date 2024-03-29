@@ -11,6 +11,7 @@ import eth_account
 import numpy as np
 import pandas as pd
 import requests
+from dotenv import dotenv_values
 from hyperliquid.exchange import Exchange
 from hyperliquid.info import Info
 from hyperliquid.utils import constants
@@ -44,6 +45,10 @@ class HyperLiquid:
         """
         Initializes the HyperLiquid class with necessary API connections and account information.
         """
+        env = {**dotenv_values(".env.shared"), **dotenv_values(".env.secret")}
+        os.environ["HYPERLIQUID_TRADER"] = env["HYPERLIQUID_TRADER"]
+        os.environ["HYPERLIQUID_PRIVATE_KEY"] = env["HYPERLIQUID_PRIVATE_KEY"]
+
         self.info = Info(constants.MAINNET_API_URL, skip_ws=False)
         self.account = eth_account.Account.from_key(
             os.environ["HYPERLIQUID_PRIVATE_KEY"]
