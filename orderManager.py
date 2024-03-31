@@ -375,8 +375,10 @@ class OrderManager(object):
             qty = self.get_qty(order_level, max_position_size)
             # check if this is hedgable
             if self.hedge_client is not None:
-                if self.hedge_client.can_open_position(qty) is False:
-                    print("not enough margin to hedge position")
+                if self.hedge_client.can_open_position(qty, rounded_bid_price) is False:
+                    print(
+                        "not enough margin to hedge position, skipping making on hubble"
+                    )
                     continue
 
             reduce_only = False
@@ -423,7 +425,7 @@ class OrderManager(object):
             max_position_size = (available_margin * leverage) / rounded_ask_price
             qty = self.get_qty(order_level, max_position_size) * -1
             if self.hedge_client is not None:
-                if self.hedge_client.can_open_position(qty) is False:
+                if self.hedge_client.can_open_position(qty, rounded_ask_price) is False:
                     print("not enough margin to hedge position")
                     continue
 
@@ -517,7 +519,8 @@ class OrderManager(object):
                     order_direction = 1 if order_data.base_asset_quantity > 0 else -1
                     # @todo add taker fee data here
                     avg_hedge_price = await self.hedge_client.on_Order_Fill(
-                        float(response.Args["fillAmount"]) * order_direction * -1
+                        float(response.Args["fillAmount"]) * order_direction * -1,
+                        response.Args["price"],
                     )
                     self.performance_data["orders_hedged"] += 1
                     instant_pnl = 0

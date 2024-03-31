@@ -176,7 +176,6 @@ class PriceFeed:
                 async with websockets.connect(ws_url) as websocket:
                     print("Connected to the server.")
                     if self.binance_futures_feed_stopped:
-                        # @todo check if this is the correct way to clear the event
                         mid_price_streaming_event.set()
                         self.binance_futures_feed_stopped = False
                     attempt_count = 0  # Reset attempt counter on successful connection

@@ -34,7 +34,6 @@ logger = get_logger()
 
 
 class HyperLiquid:
-    price_feed_last_updated = None
 
     def __init__(
         self,
@@ -74,6 +73,7 @@ class HyperLiquid:
         self.is_trader_feed_down = True
         self.hedge_client_uptime_event = None
         self.unhandled_exception_encountered = unhandled_exception_encountered
+        self.price_feed_last_updated = None
 
     def reset_connection(self):
         self.info = Info(constants.MAINNET_API_URL, skip_ws=False)
@@ -149,9 +149,6 @@ class HyperLiquid:
         self.ask_prices = ask_df
         self.bid_prices = bid_df
         self.price_feed_last_updated = time.time()
-
-    def get_prices(self):
-        return self.bid_prices.to_dict("list"), self.ask_prices.to_dict("list")
 
     async def set_initial_leverage(self):
         # check existing position size. Update only at the beginning
@@ -336,33 +333,30 @@ class HyperLiquid:
         return price
 
     # @todo account for reducing position size
-    def can_open_position(self, size):
-        price = self.get_fill_price(size)
+    def can_open_position(self, size, price):
+        # price = self.get_fill_price(size)
         price = with_slippage(price, self.slippage, size > 0)
         return (
             self.state["available_margin"]
             >= abs(size * price) / self.desired_max_leverage
         )
 
-    async def on_Order_Fill(self, size):
-        # start a thread to execute trade and retry if failed
-        # // check if any pending market orders. Club them ??
-        # retries = get from config
-        # delay = get from config
+    # @todo check the conversion of price decimals as needed
+    async def on_Order_Fill(self, size, price):
         retries = 4
         delay = 0.2
         filled_size = 0
-        fill_price = self.get_fill_price(size)
+        # todo , change this to use actual order fill price with slippage as max price.
         final_avg_fill_price = 0
         total_fee = 0
-        if self.can_open_position(size):
+        if self.can_open_position(size, price):
             for i in range(retries):
                 try:
                     print(
-                        f"✅✅✅✅✅✅✅✅Executing hedge trade attempt {i+1}✅✅✅✅✅✅✅"
+                        f"✅✅Executing hedge trade attempt on hyperliquid, {i+1}✅✅"
                     )
                     order_execution_response = await self.execute_trade(
-                        size - filled_size, False, fill_price, self.slippage
+                        size - filled_size, False, price, self.slippage
                     )
                     final_avg_fill_price += order_execution_response["price"] * (
                         order_execution_response["filled_quantity"] / size
@@ -381,13 +375,13 @@ class HyperLiquid:
                     print(f"Trade execution failed on attempt {i+1}: {e}")
                     # If this was the last attempt, re-raise the exception
                     if i == retries - 1:
-                        raise
+                        raise e
                     # Wait before the next attempt
                     await asyncio.sleep(delay)
             # @todo return taker fee as well
             return final_avg_fill_price
-        else:
-            print(f"Hedge Trade cannot be executed. Insufficient margin. Attempt {i+1}")
+
+        print(f"Hedge Trade cannot be executed. Insufficient margin. Attempt {i+1}")
 
     @timeit
     async def execute_trade(self, quantity, reduce_only=False, price=None, slippage=0):
@@ -494,7 +488,7 @@ class HyperLiquid:
         #     "price": price,
         # }
         return {
-            "exchange": "binance",
+            "exchange": "hyperliquid",
             "isCompletelyFilled": filled_quantity == quantity,
             "filled_quantity": filled_quantity,
             "quantity": quantity,
