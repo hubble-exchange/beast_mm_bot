@@ -292,7 +292,8 @@ class Bybit:
         endpoint = "/v5/order/create"
 
         try:
-            response = await self.post(endpoint, json.dumps(payload))
+            response = await self.post(endpoint, payload)
+            # response = await self.post(endpoint, json.dumps(payload))
             print("Bybit order response = ", response)
             if response.retMsg != "OK":
                 raise Exception(
