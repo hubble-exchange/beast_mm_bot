@@ -104,7 +104,7 @@ COQ = {
     },
     "hedge": "bybit",
     "hedge_mode": True,  # enable hedge mode ?
-    "slippage": 0.01,  # max slippage for hegde orders
+    "slippage": 0.05,  # max slippage for hegde orders
     "mid_price_expiry": 1,  # expiry of mid price from price feed while generating new orders (Should be greater than binance feed frequency)
     "hedgeClient_orderbook_frequency": 2,  # binance/hyperliquid feed frequency
     "hedgeClient_user_state_frequency": 5,  # binance/hyperliquid feed frequency

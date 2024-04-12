@@ -38,6 +38,7 @@ class Bybit:
         self.private_client = None
         self.orderbook_feed_task = None
         self.user_state_updater = None
+        self.monitor_orders_task = None
         self.mid_price = 0
         self.best_bid = None
         self.best_ask = None
@@ -56,24 +57,24 @@ class Bybit:
         self.price_feed_uptime_event = None
         self.session = None
         self.active_orders = []
-        self.placed_orders = {}
+        self.failed_orders = []
         self.filled_orders = []
+        self.active_order_data = {}
         self.filled_order_data = {}
+        self.failed_order_data = {}
 
-    # async def stream_orderbook(self, orderbook_frequency):
-
-    # handle breaks in connection
+    # connection breaks are handled by the library
     def initialize_client(self, is_private_required=False):
         if is_private_required and self.private_client is None:
             if (
-                os.environ["BYBIT_TEST_KEY"] is not None
-                and os.environ["BYBIT_TEST_SECRET"] is not None
+                os.environ["BYBIT_KEY"] is not None
+                and os.environ["BYBIT_SECRET"] is not None
             ):
                 self.private_client = WebSocket(
-                    testnet=True,
+                    testnet=False,
                     channel_type="private",
-                    api_key=os.environ["BYBIT_TEST_KEY"],
-                    api_secret=os.environ["BYBIT_TEST_SECRET"],
+                    api_key=os.environ["BYBIT_KEY"],
+                    api_secret=os.environ["BYBIT_SECRET"],
                     trace_logging=True,
                 )
             else:
@@ -103,14 +104,12 @@ class Bybit:
             self.update_user_state(user_state_frequency)
         )
         self.orderbook_feed_task = asyncio.create_task(self.stream_orderbook())
-        await asyncio.sleep(5)
-        await self.on_Order_Fill(1000, self.mid_price, hubble_order_id=uuid.uuid4().hex)
+        self.monitor_orders_task = asyncio.create_task(self.monitor_orders())
 
     async def update_user_state(self, user_state_frequency):
         while True:
             try:
-                # @todo add error handling
-                endpoint = "/v5/position/list"
+                endpoint = "v5/position/list"
                 query = f"category=linear&symbol={self.market}"
                 response = await self.get(endpoint, query)
                 user_position = response["result"]["list"][0]
@@ -119,7 +118,7 @@ class Bybit:
                     raise ValueError(
                         f"Symbol mismatch. Expected {self.market}, got {user_position['symbol']}"
                     )
-                wallet_endpoint = "/v5/account/wallet-balance"
+                wallet_endpoint = "v5/account/wallet-balance"
                 wallet_query = "accountType=UNIFIED"
                 wallet_response = await self.get(wallet_endpoint, wallet_query)
                 # print("wallet_response = ", wallet_response)
@@ -137,9 +136,7 @@ class Bybit:
                     "size": user_position["size"],
                     "side": user_position["side"],
                     "leverage": user_position["leverage"],
-                    "available_margin": user_wallet_data[
-                        "totalAvailableBalance"
-                    ],  # "totalAvailableBalance": "3.00326056",
+                    "available_margin": user_wallet_data["totalAvailableBalance"],
                 }
             except Exception as e:
                 print(f"Error updating user state: {e}")
@@ -149,8 +146,6 @@ class Bybit:
             await asyncio.sleep(user_state_frequency)
 
     def orderbook_stream_update_callback(self, response):
-        print("Bybit orderbook update received")
-        # bids are in the form 'b': ['0.04235', '1180']], 'a': [['0.04603', '1000020']]
         self.best_bid = response["data"]["b"][0][0]
         self.best_ask = response["data"]["a"][0][0]
         self.mid_price = (float(self.best_ask) + float(self.best_bid)) / 2
@@ -169,7 +164,6 @@ class Bybit:
         self.price_feed_last_updated = response["ts"]
 
     async def stream_orderbook(self, level=50):
-        # @todo add check if connection is down
         if self.client is None:
             # initialize client
             self.initialize_client()
@@ -177,11 +171,66 @@ class Bybit:
             level, self.market, self.orderbook_stream_update_callback
         )
 
-    # async def check_last_data_time():
-    #     while True:
-    #         if time.time() - self.lastUpdated > 0:
-    #             print("Data delta = ", time.time() - self.lastUpdated)
-    #         await asyncio.sleep(1)
+    def order_stream_update_callback(self, response):
+        try:
+            if response["topic"] == "order":
+                response_data = response["data"][0]
+                order_id = response_data["orderId"]
+                hubble_order_id = response_data["orderLinkId"]
+                if hubble_order_id in self.active_orders:
+                    if response_data["orderStatus"] == "Filled":
+                        if response_data["leavesQty"] == "":
+                            self.active_orders.remove(hubble_order_id)
+                            self.active_order_data.pop(hubble_order_id, None)
+                        else:
+                            # @todo should create another market order for remaining leavesQty??
+                            pass
+                        if hubble_order_id not in self.filled_orders:
+                            print("Appending order to filled orders", hubble_order_id)
+                            self.filled_orders.append(hubble_order_id)
+                        self.filled_order_data[hubble_order_id] = {
+                            "side": response_data["side"],
+                            "order_id": response_data["orderId"],
+                            "hubble_order_id": response_data["orderLinkId"],
+                            "qty": response_data["qty"],
+                            "fill_price": response_data["avgPrice"],
+                            "filled_qty": response_data["cumExecQty"],
+                            "trade_fee": response_data["cumExecFee"],
+                        }
+                        print(
+                            "Filled order data = ",
+                            self.filled_order_data[hubble_order_id],
+                        )
+                    elif (
+                        response_data["orderStatus"] == "Cancelled"
+                        or response_data["orderStatus"] == "Rejected"
+                    ):
+                        print(
+                            "Appending order to failed orders",
+                            hubble_order_id,
+                            response,
+                        )
+                        self.active_orders.remove(hubble_order_id)
+                        self.active_order_data.pop(hubble_order_id, None)
+                        self.failed_orders.append(hubble_order_id)
+                        # @todo should create another market order?
+                        self.failed_order_data[hubble_order_id] = {
+                            "side": response_data["side"],
+                            "order_id": response_data["orderId"],
+                            "hubble_order_id": response_data["orderLinkId"],
+                            "qty": response_data["qty"],
+                            "fill_price": "0",
+                            "filled_qty": "0",
+                            "trade_fee": "0",
+                        }
+        except Exception as e:
+            print(f"Error in order stream update callback: {e}")
+
+    async def monitor_orders(self):
+        if self.private_client is None:
+            # initialize client
+            self.initialize_client(is_private_required=True)
+        self.private_client.order_stream(callback=self.order_stream_update_callback)
 
     ######### Order Execution #########
 
@@ -196,7 +245,7 @@ class Bybit:
         return True
 
     async def set_initial_leverage(self):
-        if self.position_size is 0:
+        if self.position_size == 0:
             try:
                 print("Setting initial leverage on Bybit...")
                 leverage = self.desired_max_leverage
@@ -204,18 +253,9 @@ class Bybit:
                 body = {
                     "category": "linear",
                     "symbol": self.market,
-                    "buyLeverage": leverage,
-                    "sellLeverage": leverage,
+                    "buyLeverage": str(leverage),
+                    "sellLeverage": str(leverage),
                 }
-                print(json.dumps(body))
-                body_str = json.dumps(body)
-                # {
-                #     "retCode": 0,
-                #     "retMsg": "OK",
-                #     "result": {},
-                #     "retExtInfo": {},
-                #     "time": 1672281607343,
-                # }
                 response = await self.post(endpoint, body)
                 print("set_initial_leverage response = ", response)
                 if response["retMsg"] == "OK":
@@ -227,7 +267,7 @@ class Bybit:
                 f"Skipping setting leverage for {self.market} on Bybit as position already exists."
             )
 
-    async def on_Order_Fill(self, size, price, hubble_order_id=None):
+    async def on_Order_Fill(self, size, price, hubble_order_id=uuid.uuid4().hex):
         retries = 4
         delay = 1
         total_fee = 0
@@ -236,17 +276,33 @@ class Bybit:
             for i in range(retries):
                 try:
                     print(f"✅✅Executing hedge trade attempt on bybit, {i+1}✅✅")
-                    print(f"Size = {size}, Price = {price}")
-                    order_id = await self.execute_trade(
-                        size, False, price, self.slippage, hubble_order_id
-                    )
+                    if hubble_order_id in self.active_orders:
+                        await asyncio.sleep(1)
+                        continue
+                    else:
+                        order_id = await self.execute_trade(
+                            size, False, price, self.slippage, hubble_order_id
+                        )
                     if order_id:
-                        # @todo how to send back the final fill price ??
-                        # @todo wait for a few seconds and check the status
-
-                        # total_fee += trade_fee
-                        # final_avg_fill_price = avg_fill_price
-                        break
+                        # wait for a few seconds and check the status
+                        await asyncio.sleep(1)
+                        if hubble_order_id in self.filled_orders:
+                            print("Found Order in filled orders on Bybit")
+                            final_avg_fill_price = self.filled_order_data[
+                                hubble_order_id
+                            ]["fill_price"]
+                            total_fee = self.filled_order_data[hubble_order_id][
+                                "trade_fee"
+                            ]
+                            break
+                        elif hubble_order_id in self.failed_orders:
+                            print("Found Order in failed orders on Bybit")
+                            # @todo retry the order but cant place with same linkOrderId.
+                        else:
+                            print("Order still pending on Bybit")
+                            await asyncio.sleep(1)
+                            # wait and continue to check status
+                            continue
                 except Exception as e:
                     print(f"Trade execution failed on attempt {i+1}: {e}")
                     # If this was the last attempt, re-raise the exception
@@ -281,9 +337,10 @@ class Bybit:
             "orderType": "Limit",
             "timeInForce": "IOC",
             "side": "Buy" if is_buy else "Sell",
-            "qty": abs(quantity),
-            "price": price,
+            "qty": str(abs(quantity)),
+            "price": str(price),
             "orderLinkId": hubble_order_id if hubble_order_id else uuid.uuid4().hex,
+            "positionIdx": 0,
         }
         # payload_str = f'{{"category":"{payload["category"]}","symbol":"{payload["symbol"]}","orderType":"{payload["orderType"]}","timeInForce":"{payload["timeInForce"]}","side":"{payload["side"]}","qty":"{payload["qty"]}","price":"{payload["price"]}","orderLinkId":"{payload["orderLinkId"]}"}}'
 
@@ -294,19 +351,19 @@ class Bybit:
         try:
             response = await self.post(endpoint, payload)
             # response = await self.post(endpoint, json.dumps(payload))
-            print("Bybit order response = ", response)
-            if response.retMsg != "OK":
+            if response["retMsg"] != "OK":
                 raise Exception(
                     f"Error: placing order on Bybit. Response -> {response}"
                 )
             order_id = response["result"]["orderId"]
-            self.placed_orders[order_id] = {
+            hubble_order_id = response["result"]["orderLinkId"]
+            self.active_order_data[hubble_order_id] = {
                 "side": "Buy" if is_buy else "Sell",
                 "qty": abs(quantity),
                 "price": price,
                 "filled_qty": 0,
             }
-            self.active_orders.append(order_id)
+            self.active_orders.append(hubble_order_id)
             return order_id
             # return {
             #     "exchange": "bybit",
@@ -344,7 +401,6 @@ class Bybit:
         if self.session and not self.session.closed:
             await self.session.close()
 
-    # param payload is a string
     def generate_signature(self, timestamp, recv_window, payload, api_key, secret_key):
         param_str = timestamp + api_key + recv_window + payload
         hash = hmac.new(
@@ -353,7 +409,6 @@ class Bybit:
         signature = hash.hexdigest()
         return signature
 
-    # param payload is a json string of POST req body
     async def post(self, endpoint: str, payload=None) -> Any:
         if payload is None:
             payload = "{}"  # Empty JSON object
@@ -363,6 +418,7 @@ class Bybit:
 
         api_key = os.environ["BYBIT_KEY"]
         secret_key = os.environ["BYBIT_SECRET"]
+
         if api_key is None or secret_key is None:
             raise ValueError("Bybit API keys not found")
 
@@ -376,13 +432,10 @@ class Bybit:
             "X-BAPI-SIGN-TYPE": "2",
             "X-BAPI-TIMESTAMP": timestamp,
             "X-BAPI-RECV-WINDOW": recv_window,
-            "Content-Type": "application/json",
         }
         url = "https://api.bybit.com/" + endpoint
 
         session = await self.get_session()  # Ensure the session is ready
-
-        print("Bybit sending POST request now", payload)
         response = await session.post(url, headers=headers, json=payload)
         await self._handle_exception(response)
 
@@ -392,9 +445,6 @@ class Bybit:
             return {"error": f"Could not parse JSON: {await response.text()}"}
 
     async def get(self, endpoint: str, query: str) -> Any:
-        # if payload is None:
-        #     payload = "{}"  # Empty JSON object
-
         timestamp = str(int(time.time() * 10**3))
         recv_window = "5000"  # 5 seconds validity for bybit to recv the request
 
@@ -415,8 +465,8 @@ class Bybit:
             "Content-Type": "application/json",
         }
 
-        url = "https://api.bybit.com" + endpoint
-        if query is not "":
+        url = "https://api.bybit.com/" + endpoint
+        if query != "":
             url = url + "?" + query
         session = await self.get_session()  # Ensure the session is ready
 
@@ -435,7 +485,7 @@ class Bybit:
             return
         if 400 <= status_code < 500:
             try:
-                response.json()
+                # response.json()
                 err = json.loads(response.text)
             except json.JSONDecodeError:
                 pass
