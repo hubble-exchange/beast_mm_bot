@@ -75,7 +75,7 @@ class Bybit:
                     channel_type="private",
                     api_key=os.environ["BYBIT_KEY"],
                     api_secret=os.environ["BYBIT_SECRET"],
-                    trace_logging=True,
+                    trace_logging=False,
                 )
             else:
                 raise ValueError("Bybit API keys not found")
@@ -121,8 +121,6 @@ class Bybit:
                 wallet_endpoint = "v5/account/wallet-balance"
                 wallet_query = "accountType=UNIFIED"
                 wallet_response = await self.get(wallet_endpoint, wallet_query)
-                # print("wallet_response = ", wallet_response)
-                # print("user_position = ", wallet_response)
                 user_wallet_data = wallet_response["result"]["list"][0]
                 # , side, , positionValue,
                 if self.is_trader_feed_down:
@@ -247,7 +245,6 @@ class Bybit:
     async def set_initial_leverage(self):
         if self.position_size == 0:
             try:
-                print("Setting initial leverage on Bybit...")
                 leverage = self.desired_max_leverage
                 endpoint = "v5/position/set-leverage"
                 body = {
@@ -257,7 +254,6 @@ class Bybit:
                     "sellLeverage": str(leverage),
                 }
                 response = await self.post(endpoint, body)
-                print("set_initial_leverage response = ", response)
                 if response["retMsg"] == "OK":
                     print(f"Successfully set leverage to {leverage} on Bybit.")
             except Exception as e:
@@ -343,8 +339,6 @@ class Bybit:
             "positionIdx": 0,
         }
         # payload_str = f'{{"category":"{payload["category"]}","symbol":"{payload["symbol"]}","orderType":"{payload["orderType"]}","timeInForce":"{payload["timeInForce"]}","side":"{payload["side"]}","qty":"{payload["qty"]}","price":"{payload["price"]}","orderLinkId":"{payload["orderLinkId"]}"}}'
-
-        print("Bybit sending order now")
 
         endpoint = "/v5/order/create"
 

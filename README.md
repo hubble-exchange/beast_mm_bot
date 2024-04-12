@@ -25,6 +25,7 @@ pip install setuptools pandas numpy cachetools hubble_exchange==0.9.0rc10 python
 pip install hyperliquid-python-sdk==0.1.19
 pip uninstall eth-account
 pip install eth-account==0.10.0
+pip install pybit
 ```
 
 ## Add your Credentials for managing Hubble, Binance and Hyperliquid accounts
