@@ -35,7 +35,7 @@ class OrderManager(object):
         self.mid_price_last_updated_at = 0
         self.position_polling_task = None
         self.create_orders_task = None
-        self.order_fill_cooldown_triggered = False
+        # self.order_fill_cooldown_triggered = False
         self.is_order_fill_active = False
         self.is_trader_position_feed_active = False
         self.save_performance_task = None
@@ -57,6 +57,7 @@ class OrderManager(object):
             # "taker_fee": 0, @todo add this
             # "maker_fee": 0, @todo add this
         }
+        self.last_order_fill_time = 0  # is in seconds
 
     async def start(
         self,
@@ -179,7 +180,11 @@ class OrderManager(object):
                     await asyncio.sleep(5)
                     continue
                 # get mid price
-                if self.order_fill_cooldown_triggered:
+                if (
+                    time.time() - self.last_order_fill_time
+                    < self.settings["order_fill_cooldown"]
+                ):
+
                     print("order fill cooldown triggered, skipping order creation")
                     await self.wait_until_next_order()
                     continue
@@ -239,10 +244,10 @@ class OrderManager(object):
                 retry_delay *= 2
                 # exit the application
 
-    async def set_order_fill_cooldown(self):
-        self.order_fill_cooldown_triggered = True
-        await asyncio.sleep(self.settings["order_fill_cooldown"])
-        self.order_fill_cooldown_triggered = False
+    # async def set_order_fill_cooldown(self):
+    #     self.order_fill_cooldown_triggered = True
+    #     await asyncio.sleep(self.settings["order_fill_cooldown"])
+    #     self.order_fill_cooldown_triggered = False
 
     async def place_orders(self, signed_orders):
         try:
@@ -367,9 +372,7 @@ class OrderManager(object):
                             bid_price, get_price_precision(self.market)
                         )
             except Exception as e:
-                # @todo add better handling
                 print("failed to get best ask on hubble", e)
-                # continue with execution of rest of the function
 
             max_position_size = (available_margin * leverage) / rounded_bid_price
             qty = self.get_qty(order_level, max_position_size)
@@ -496,15 +499,10 @@ class OrderManager(object):
     async def order_fill_callback(self, ws, response: TraderFeedUpdate):
         if response.EventName == "OrderMatched":
             print(
-                f"✅✅✅order {response.OrderId} has been filled. fillAmount: {response.Args['fillAmount']}✅✅✅"
+                f"{time.strftime('%H:%M:%S')} : ✅✅✅order {response.OrderId} has been filled. fillAmount: {response.Args['fillAmount']}✅✅✅"
             )
             order_data = self.order_data.get(response.OrderId, None)
             # self.performance_data["maker_fee"] += response.Args["openInterestNotional"] * trading fee percentage
-            if order_data is None:
-                print(
-                    f"❌❌❌order {response.OrderId} not found in placed_orders_data. Cant decide hedge direction❌❌❌"
-                )
-                return
 
             ## update performance data
             self.performance_data["orders_filled"] += 1
@@ -514,6 +512,12 @@ class OrderManager(object):
             self.performance_data["cumulative_trade_volume"] += float(
                 response.Args["fillAmount"]
             )  # fillAmount is abs value
+            if order_data is None:
+                print(
+                    f"{time.strftime('%H:%M:%S')} : ❌❌❌order {response.OrderId} not found in placed_orders_data. Cant decide hedge direction❌❌❌"
+                )
+                return
+
             if self.settings["hedge_mode"]:
                 try:
                     order_direction = 1 if order_data.base_asset_quantity > 0 else -1
@@ -534,13 +538,12 @@ class OrderManager(object):
                         )
 
                     self.performance_data["hedge_spread_pnl"] += instant_pnl
-
                 except Exception as e:
                     print(f"failed to hedge order fill: {e}")
                     self.unhandled_exception_encountered.set()
                     # exit the application
-
-            await self.set_order_fill_cooldown()
+            self.last_order_fill_time = time.time()
+            # await self.set_order_fill_cooldown()
 
     async def start_order_fill_feed(self):
         max_retries = 5

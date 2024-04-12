@@ -13,6 +13,7 @@ import config
 from typing import TypedDict
 from hyperliquid_async import HyperLiquid
 from binance_async import Binance
+from connectors.bybit import Bybit
 from orderManager import OrderManager
 
 env = {**dotenv_values(".env.shared"), **dotenv_values(".env.secret")}
@@ -29,6 +30,7 @@ settings = getattr(config, sys.argv[1])
 async def exit_maker(unhandled_exception_encountered: asyncio.Event):
     await unhandled_exception_encountered.wait()
     print("Restarting application due to a unhandled task exception.")
+    # call close functions here on all clients
     # send tg notif.
     os._exit(1)
 
@@ -52,6 +54,13 @@ async def main(market):
             print("Starting feed")
             await price_feed.start_binance_futures_feed(
                 market,
+                mid_price_streaming_event,
+                mid_price_condition,
+            )
+        elif settings["priceFeed"] == "bybit":
+            print("Starting bybit feed")
+            await price_feed.start_bybit_feed(
+                settings["hedge_client_symbol"],
                 mid_price_streaming_event,
                 mid_price_condition,
             )
@@ -79,6 +88,15 @@ async def main(market):
             elif settings["hedge"] == "binance":
                 hedge_client = Binance(
                     asset_name + "USDT",
+                    unhandled_exception_encountered,
+                    {
+                        "desired_max_leverage": settings["leverage"],
+                        "slippage": settings["slippage"],
+                    },
+                )
+            elif settings["hedge"] == "bybit":
+                hedge_client = Bybit(
+                    settings["hedge_client_symbol"],
                     unhandled_exception_encountered,
                     {
                         "desired_max_leverage": settings["leverage"],
@@ -129,7 +147,6 @@ async def main(market):
 # Start and run until complete
 loop = asyncio.get_event_loop()
 task = loop.create_task(main(sys.argv[1]))
-
 
 # Run until a certain condition or indefinitely
 try:

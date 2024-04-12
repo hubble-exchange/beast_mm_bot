@@ -335,18 +335,17 @@ class HyperLiquid:
     # @todo account for reducing position size
     def can_open_position(self, size, price):
         # price = self.get_fill_price(size)
-        price = with_slippage(price, self.slippage, size > 0)
-        return (
-            self.state["available_margin"]
-            >= abs(size * price) / self.desired_max_leverage
-        )
+        # price = with_slippage(price, self.slippage, size > 0)
+        # return (
+        #     self.state["available_margin"]
+        #     >= abs(size * price) / self.desired_max_leverage
+        # )
+        return True
 
-    # @todo check the conversion of price decimals as needed
     async def on_Order_Fill(self, size, price):
         retries = 4
         delay = 0.2
         filled_size = 0
-        # todo , change this to use actual order fill price with slippage as max price.
         final_avg_fill_price = 0
         total_fee = 0
         if self.can_open_position(size, price):

@@ -1,3 +1,4 @@
+from pybit.unified_trading import WebSocket
 import asyncio
 import json
 import os
@@ -13,16 +14,21 @@ import tools
 class PriceFeed:
 
     def __init__(self, unhandled_exception_encountered: asyncio.Event):
+        self.loop = asyncio.get_event_loop()
         self.unhandled_exception_encountered = unhandled_exception_encountered
         self.mid_price = 0
         self.mid_price_last_updated_at = 0
         self.hubble_prices = [float("inf"), 0]  # [best_ask, best_bid]
         self.hubble_market_id = None
         self.hubble_client = None
+        self.bybit_client = None
         self.is_hubble_price_feed_stopped = True
+        self.is_bybit_price_feed_stopped = True
         self.binance_spot_feed_stopped = True
         self.binance_market_id = None
         self.binance_futures_feed_stopped = True
+        self.mid_price_streaming_event: asyncio.Event = None
+        self.mid_price_condition: asyncio.Condition = None
 
     async def start_hubble_feed(
         self, client: HubbleClient, market, freq, hubble_price_streaming_event
@@ -86,7 +92,7 @@ class PriceFeed:
                     print("Maximum retry attempts reached. Exiting price feed.")
                     # @todo check how to bubble the exceptionunhandled_exception_encountered
                     self.unhandled_exception_encountered.set()
-                    break
+                    raise e
                 print("Error in start_hubble_feed err - ", e)
                 # restart hubble feed
                 hubble_price_streaming_event.clear()
@@ -116,7 +122,6 @@ class PriceFeed:
 
                     res = await tscm.recv()
                     if self.binance_spot_feed_stopped:
-                        # @todo check if this is the correct way to clear the event
                         mid_price_streaming_event.set()
                         self.binance_spot_feed_stopped = False
                     price = float(res["p"])
@@ -206,6 +211,83 @@ class PriceFeed:
                 )
                 await asyncio.sleep(retry_delay)
                 retry_delay *= 2  # Exponential backoff
+
+    ######### ByBit Feed #########
+
+    async def start_bybit_feed(
+        self,
+        symbol,
+        mid_price_streaming_event: asyncio.Event,
+        mid_price_condition: asyncio.Condition,
+    ):
+        print(f"subscribe_to_bybit_futures_feed for {symbol}...")
+        if self.bybit_client is None:
+            # initialize client
+            self.bybit_client = WebSocket(
+                testnet=False,
+                channel_type="linear",
+            )
+        level = 1  # since we only need the mid price we can subscribe to depth level 1 i.e top bid and top ask
+        self.mid_price_streaming_event = mid_price_streaming_event
+        self.mid_price_condition = mid_price_condition
+        task = asyncio.create_task(
+            self.subscribe_to_bybit_order_book(
+                symbol, mid_price_streaming_event, mid_price_condition, level
+            )
+        )
+        return task
+
+    async def async_update_mid_price(self, mid_price, last_updated):
+        if self.is_bybit_price_feed_stopped:
+            self.mid_price_streaming_event.set()
+            self.is_bybit_price_feed_stopped = False
+        self.mid_price = mid_price
+        self.mid_price_last_updated_at = last_updated
+        async with self.mid_price_condition:
+            self.mid_price_condition.notify_all()
+
+    def bybit_callback(self, response):
+        try:
+            mid_price = (
+                float(response["data"]["a"][0][0]) + float(response["data"]["b"][0][0])
+            ) / 2
+            last_updated = response["ts"]
+            self.loop.create_task(self.async_update_mid_price(mid_price, last_updated))
+        except Exception as e:
+            print(f"Error in bybit_callback: {e}")
+            self.unhandled_exception_encountered.set()
+
+    async def subscribe_to_bybit_order_book(
+        self,
+        symbol,
+        mid_price_streaming_event: asyncio.Event,
+        mid_price_condition: asyncio.Condition,
+        level=1,
+    ):
+        retry_delay = 1  # Initial retry delay in seconds
+        max_retries = 5  # Maximum number of retries
+        attempt_count = 0  # Attempt counter
+
+        # while True:
+        try:
+            # check if connection is up
+            self.bybit_client.orderbook_stream(level, symbol, self.bybit_callback)
+        except Exception as err:
+            # if attempt_count >= max_retries:
+            #     print("Maximum retry attempts reached while fetching bybit price feed.")
+            #     self.unhandled_exception_encountered.set()
+            #     # break
+            mid_price_streaming_event.clear()
+            self.is_bybit_price_feed_stopped = True
+            print(f"Bybit futures feed connection error: {err}")
+            self.unhandled_exception_encountered.set()
+
+            # attempt_count += 1
+            # print(
+            #     f"Attempting to reconnect to bybit in {retry_delay} seconds... (Attempt {attempt_count}/{max_retries})"
+            # )
+            # await asyncio.sleep(retry_delay)
+            # retry_delay *= 2  # Exponential backoff
 
     def get_mid_price(self):
         return self.mid_price
